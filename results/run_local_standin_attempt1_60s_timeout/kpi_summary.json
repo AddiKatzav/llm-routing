@@ -1,0 +1,65 @@
+{
+  "static_semantic": {
+    "router_name": "static_semantic",
+    "sample_size": 6,
+    "wall_avoidance_rate": 1.0,
+    "routing_overhead_p50_ms": 0.16498100012540817,
+    "routing_overhead_p95_ms": 0.16498100012540817,
+    "task_success_rate": 0.0,
+    "silent_failure_recovery_rate": 1.0,
+    "cost_efficiency": NaN,
+    "effective_cost_per_success_usd": Infinity,
+    "breakdown_by_context_depth": {
+      "shallow": {
+        "task_success_rate": 0.0,
+        "wall_avoidance_rate": 1.0
+      },
+      "near_wall": {
+        "task_success_rate": 0.0,
+        "wall_avoidance_rate": 1.0
+      }
+    }
+  },
+  "context_aware": {
+    "router_name": "context_aware",
+    "sample_size": 6,
+    "wall_avoidance_rate": 1.0,
+    "routing_overhead_p50_ms": 5417.461614502827,
+    "routing_overhead_p95_ms": 8943.381503995624,
+    "task_success_rate": 0.16666666666666666,
+    "silent_failure_recovery_rate": 1.0,
+    "cost_efficiency": NaN,
+    "effective_cost_per_success_usd": 0.0,
+    "breakdown_by_context_depth": {
+      "shallow": {
+        "task_success_rate": 0.2,
+        "wall_avoidance_rate": 1.0
+      },
+      "near_wall": {
+        "task_success_rate": 0.0,
+        "wall_avoidance_rate": 1.0
+      }
+    }
+  },
+  "commercial_cloud": {
+    "router_name": "commercial_cloud",
+    "sample_size": 6,
+    "wall_avoidance_rate": 1.0,
+    "routing_overhead_p50_ms": 0.03331549669383094,
+    "routing_overhead_p95_ms": 0.07274825184140354,
+    "task_success_rate": 0.16666666666666666,
+    "silent_failure_recovery_rate": 1.0,
+    "cost_efficiency": NaN,
+    "effective_cost_per_success_usd": 0.0,
+    "breakdown_by_context_depth": {
+      "shallow": {
+        "task_success_rate": 0.2,
+        "wall_avoidance_rate": 1.0
+      },
+      "near_wall": {
+        "task_success_rate": 0.0,
+        "wall_avoidance_rate": 1.0
+      }
+    }
+  }
+}

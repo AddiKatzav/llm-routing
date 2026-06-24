@@ -969,6 +969,34 @@ run-level aggregates (e.g. "TSR by router by context depth").
    vs. Not Diamond) — affects `CommercialCloudRouter`'s payload mapping but
    not the interface contract above.
 
+### 8.1 Resolved: Reference Run Configuration (local-only substitution for cloud)
+
+For the first real (non-mocked) execution of this benchmark, no
+`ANTHROPIC_API_KEY` or commercial-router credentials are provisioned —
+the operator's Claude Pro/Max subscription covers interactive Claude.ai
+and Claude Code usage, but **not** the metered Anthropic Messages API
+that `AnthropicCloudProvider` calls, and provisioning a separate
+pay-as-you-go API key was explicitly declined to avoid additional billing
+beyond the existing subscription. Resolving open question 4 above in the
+process, the reference run instead uses three locally-hosted Ollama
+models, each playing a distinct architectural role at zero marginal cost:
+
+| Role | Model | Notes |
+|---|---|---|
+| LOCAL completion model | `llama3.2:3b` | Stands in for the resource-constrained laptop model whose completion wall this suite exists to characterize. |
+| CLOUD completion model (stand-in) | `llama3.1:8b` | A larger *local* model standing in for a cloud model. This validates the full routing/escalation control flow end to end, but does **not** measure a real local-vs-cloud quality or latency tradeoff — both "providers" run on the same machine. |
+| Context-aware router's local judge | `qwen2.5:1.5b` | Smallest available model, consistent with open question 1's constraint that the judge stay materially smaller than the primary local model. |
+
+`CommercialCloudRouter`'s `CloudRouterClient` is likewise filled by a
+local stand-in (`LocalStandInCloudRouterClient` in
+`scripts/run_benchmark.py`) that deterministically selects the CLOUD
+completion model above without making any network call — there is no
+real OpenRouter/Not Diamond integration in this run. The KPI numbers this
+run produces should be read as a **structural validation that the full
+pipeline executes correctly end to end**, not as a measurement of actual
+local-vs-cloud cost/quality tradeoffs; that requires a follow-up run with
+a real cloud API key.
+
 ## 9. Acceptance Criteria for This Spec
 
 - [ ] Reviewed and approved by repo owner before any implementation PR is opened.

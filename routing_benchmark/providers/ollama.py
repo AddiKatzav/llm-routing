@@ -58,6 +58,7 @@ class OllamaProvider(BaseModelProvider):
         base_url: str = "http://localhost:11434",
         timeout_s: float = 60.0,
         tools: Optional[list[dict[str, Any]]] = None,
+        default_options: Optional[dict[str, Any]] = None,
         post_json: PostJsonFn = _default_post_json,
     ) -> None:
         if not model_id:
@@ -69,6 +70,10 @@ class OllamaProvider(BaseModelProvider):
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
         self.tools = tools or []
+        # Constructor-level defaults (e.g. num_predict/temperature to bound
+        # generation length on a real local model); a router's per-call
+        # model_params override these on key conflicts.
+        self.default_options = default_options or {}
         self._post_json = post_json
 
     def generate(self, prompt: str, model_params: dict[str, Any]) -> CompletionResult:
@@ -77,7 +82,7 @@ class OllamaProvider(BaseModelProvider):
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
         }
-        options = {k: v for k, v in model_params.items() if k != "tools"}
+        options = {**self.default_options, **{k: v for k, v in model_params.items() if k != "tools"}}
         if options:
             payload["options"] = options
         if self.tools:

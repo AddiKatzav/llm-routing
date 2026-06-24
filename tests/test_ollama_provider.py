@@ -122,3 +122,19 @@ def test_payload_omits_tools_key_when_no_tools_configured():
 
     _, payload, _ = transport.calls[0]
     assert "tools" not in payload
+
+
+def test_default_options_merge_with_per_call_model_params():
+    transport = RecordingPostJson()
+    provider = OllamaProvider(
+        model_id="llama3.1:8b",
+        default_options={"num_predict": 256, "temperature": 0.8},
+        post_json=transport,
+    )
+
+    provider.generate("hello", {"temperature": 0.1})
+
+    _, payload, _ = transport.calls[0]
+    # Per-call model_params override the constructor default on conflict,
+    # but defaults not overridden are still present.
+    assert payload["options"] == {"num_predict": 256, "temperature": 0.1}
