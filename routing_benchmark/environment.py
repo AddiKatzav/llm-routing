@@ -135,7 +135,9 @@ def extract_features(
     context_window_limit: int = DEFAULT_CONTEXT_WINDOW_LIMIT,
 ) -> RoutingFeatures:
     """Compute the state-derived signals every router receives this turn."""
-    context_tokens_used = sum(record.completion.token_usage.total_tokens for record in state.history)
+    context_tokens_used = state.synthetic_prefix_tokens + sum(
+        record.completion.token_usage.total_tokens for record in state.history
+    )
     rolling_wall_hit_rate = (state.wall_events / state.turn_count) if state.turn_count else 0.0
 
     return RoutingFeatures(

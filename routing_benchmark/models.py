@@ -138,13 +138,31 @@ class TurnRecord:
 
 
 @dataclass(frozen=True)
+class SyntheticTurn:
+    """One pre-generated prior turn used to pad a TaskCase's starting context.
+
+    Used by dataset synthesis (spec section 4.2) to simulate
+    ContextDepthLevel without actually running N real turns first --
+    AgentState.initial() folds these into a synthetic prefix transcript and
+    token count so context-occupancy features are realistic from turn one.
+    """
+    speaker: str
+    text: str
+    approx_tokens: int
+
+    def __post_init__(self) -> None:
+        if self.approx_tokens < 0:
+            raise ValueError("approx_tokens must be non-negative")
+
+
+@dataclass(frozen=True)
 class TaskCase:
     """A single synthesized benchmark task definition."""
     id: str
     domain: str
     complexity: IntentComplexity
     initial_prompt: str
-    synthetic_history: list[Any]
+    synthetic_history: list[SyntheticTurn]
     failure_profile: ToolFailureProfile
     max_turns: int
     expected_tool_calls: int
@@ -167,15 +185,34 @@ class AgentState:
     terminal: bool = False
     _initial_prompt: str = ""
     _max_turns: int = 0
+    _synthetic_prefix_tokens: int = 0
+    _synthetic_transcript: str = ""
 
     @classmethod
     def initial(cls, task: TaskCase) -> "AgentState":
         """Construct the starting state for a fresh run of the given task."""
+        synthetic_prefix_tokens = sum(turn.approx_tokens for turn in task.synthetic_history)
+        synthetic_transcript = "\n".join(
+            f"{turn.speaker.capitalize()}: {turn.text}" for turn in task.synthetic_history
+        )
         return cls(
             task_id=task.id,
             _initial_prompt=task.initial_prompt,
             _max_turns=task.max_turns,
+            _synthetic_prefix_tokens=synthetic_prefix_tokens,
+            _synthetic_transcript=synthetic_transcript,
         )
+
+    @property
+    def synthetic_prefix_tokens(self) -> int:
+        """Token weight of the dataset's synthetic context-depth padding.
+
+        Counted separately from real per-turn token usage so context
+        occupancy is realistic from turn one, without fabricating
+        RoutingDecision/CompletionResult objects for turns that never
+        actually ran.
+        """
+        return self._synthetic_prefix_tokens
 
     def is_terminal(self) -> bool:
         """Whether the run loop should stop (explicit terminal flag or max turns)."""
@@ -185,7 +222,10 @@ class AgentState:
 
     def to_prompt(self) -> str:
         """Render the current state into a model-ready prompt string."""
-        lines = [f"User: {self._initial_prompt}"]
+        lines = []
+        if self._synthetic_transcript:
+            lines.append(self._synthetic_transcript)
+        lines.append(f"User: {self._initial_prompt}")
         for record in self.history:
             if record.completion.text:
                 lines.append(f"Assistant: {record.completion.text}")
