@@ -279,6 +279,7 @@ def synthesize_dataset(seed: int) -> list[TaskCase]:
                             failure_profile=failure_profile,
                             max_turns=MAX_TURNS_BY_COMPLEXITY[complexity],
                             expected_tool_calls=expected_tool_count(domain, complexity),
+                            context_depth=depth,
                         )
                     )
     return tasks

@@ -157,7 +157,13 @@ class SyntheticTurn:
 
 @dataclass(frozen=True)
 class TaskCase:
-    """A single synthesized benchmark task definition."""
+    """A single synthesized benchmark task definition.
+
+    ``context_depth`` is optional and defaults to None for tasks built by
+    hand (e.g. in tests); ``dataset.synthesize_dataset`` always sets it,
+    since it's what lets persisted run data be broken down by
+    ContextDepthLevel (spec section 7.3's "breakdown_by_context_depth").
+    """
     id: str
     domain: str
     complexity: IntentComplexity
@@ -166,6 +172,7 @@ class TaskCase:
     failure_profile: ToolFailureProfile
     max_turns: int
     expected_tool_calls: int
+    context_depth: Optional[ContextDepthLevel] = None
 
     def __post_init__(self) -> None:
         if self.max_turns <= 0:
