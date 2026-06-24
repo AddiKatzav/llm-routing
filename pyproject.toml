@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Benchmark suite for LLM routing paradigms in agentic contexts"
 requires-python = ">=3.10"
 
+[project.optional-dependencies]
+cloud = ["anthropic>=0.40"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
