@@ -1,0 +1,15 @@
+[project]
+name = "routing-benchmark"
+version = "0.1.0"
+description = "Benchmark suite for LLM routing paradigms in agentic contexts"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["routing_benchmark*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
