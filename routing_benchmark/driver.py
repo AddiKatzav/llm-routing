@@ -33,7 +33,7 @@ from routing_benchmark.router import BaseRouter, RouterTimeoutError
 from routing_benchmark.routers.commercial_cloud import CloudRouterUnavailableError
 from routing_benchmark.tooling import BaseMockToolingLayer
 
-__all__ = ["BenchmarkDriverProtocol", "RunFailure", "BenchmarkDriver"]
+__all__ = ["BenchmarkDriverProtocol", "RunFailure", "ShadowConfig", "BenchmarkDriver"]
 
 _EXPECTED_RUN_ERRORS = (
     RouterTimeoutError,
@@ -76,6 +76,23 @@ class RunFailure:
     message: str
 
 
+@dataclass(frozen=True)
+class ShadowConfig:
+    """Per-router shadow-evaluation config backing spec section 5.3's
+    static-vs-dynamic comparative metrics.
+
+    Attributes:
+        static_router: Evaluated (not executed) every turn to compute
+            Decision Divergence Rate against the live router's choice.
+        local_model_id: Looked up in the driver's ``providers`` registry
+            to get the LOCAL provider for Escalation Precision/Recall's
+            shadow probe, made only on turns the live router escalates.
+    """
+
+    static_router: BaseRouter
+    local_model_id: str
+
+
 class BenchmarkDriver:
     """Sweeps a (tasks x routers x repeats) matrix through the Agent Environment."""
 
@@ -85,11 +102,23 @@ class BenchmarkDriver:
         mock_tooling: BaseMockToolingLayer,
         metric_collector: BaseMetricCollector | None = None,
         context_window_limit: int = DEFAULT_CONTEXT_WINDOW_LIMIT,
+        shadow_configs: dict[str, ShadowConfig] | None = None,
     ) -> None:
+        """
+        Args:
+            shadow_configs: Maps a *live* router's ``name`` to the shadow
+                config that should run alongside it -- e.g.
+                ``{"context_aware": ShadowConfig(static_router=..., local_model_id=...)}``.
+                Routers with no matching entry (typically
+                static_semantic itself, and commercial_cloud) get no
+                shadow evaluation, matching spec section 7.3's "present
+                only on the context_aware entry."
+        """
         self.providers = providers
         self.mock_tooling = mock_tooling
         self.metric_collector = metric_collector
         self.context_window_limit = context_window_limit
+        self.shadow_configs = shadow_configs or {}
         self.failures: list[RunFailure] = []
 
     def run_matrix(
@@ -115,6 +144,10 @@ class BenchmarkDriver:
         return results
 
     def _run_one(self, task: TaskCase, router: BaseRouter, run_id: str) -> RunResult:
+        shadow_config = self.shadow_configs.get(router.name)
+        shadow_static_router = shadow_config.static_router if shadow_config else None
+        shadow_local_provider = self.providers.get(shadow_config.local_model_id) if shadow_config else None
+
         try:
             result = run_task(
                 task,
@@ -123,6 +156,8 @@ class BenchmarkDriver:
                 self.mock_tooling,
                 run_id=run_id,
                 context_window_limit=self.context_window_limit,
+                shadow_static_router=shadow_static_router,
+                shadow_local_provider=shadow_local_provider,
             )
         except _EXPECTED_RUN_ERRORS as exc:
             self.failures.append(

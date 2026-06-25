@@ -40,6 +40,7 @@ from routing_benchmark.models import (
     AgentState,
     CompletionResult,
     IntentComplexity,
+    ModelTarget,
     RoutingFeatures,
     RoutingRequest,
     TaskCase,
@@ -158,6 +159,8 @@ def run_task(
     mock_tooling: BaseMockToolingLayer,
     run_id: str | None = None,
     context_window_limit: int = DEFAULT_CONTEXT_WINDOW_LIMIT,
+    shadow_static_router: BaseRouter | None = None,
+    shadow_local_provider: BaseModelProvider | None = None,
 ) -> RunResult:
     """Run a single TaskCase to completion against one router, end to end.
 
@@ -170,6 +173,20 @@ def run_task(
         run_id: Unique identifier for this run; generated if omitted.
         context_window_limit: Token capacity used for wall-proximity
             features, representing the local model's context window.
+        shadow_static_router: If provided, evaluated (not executed) every
+            turn alongside the live router to back spec section 5.3's
+            Decision Divergence Rate. This is a pure decision-function
+            call (StaticSemanticRouter makes no model call of its own), so
+            it costs nothing extra in latency or money.
+        shadow_local_provider: If provided, and the live decision for a
+            turn is CLOUD, an extra call to this provider on the same
+            prompt establishes ground truth for what LOCAL would have
+            done -- backing spec section 5.3's Escalation Precision/Recall
+            and Escalation Lead Time. Unlike the static shadow above, this
+            genuinely costs an extra model call; its cost is recorded on
+            TurnMetric.shadow_call_cost_usd, separate from the run's real
+            total_cost_usd, specifically so it cannot contaminate Cost
+            Efficiency or Routing Overhead numbers.
 
     Returns:
         The finalized RunResult for this task/router pair.
@@ -180,6 +197,8 @@ def run_task(
     """
     run_id = run_id or str(uuid.uuid4())
     router.reset()
+    if shadow_static_router is not None:
+        shadow_static_router.reset()
     state = AgentState.initial(task)
     metrics: list[TurnMetric] = []
 
@@ -191,13 +210,23 @@ def run_task(
         decision = router.route(request)
         routing_latency_ms = (time.monotonic() - route_start) * 1000.0
 
+        shadow_static_decision = shadow_static_router.route(request) if shadow_static_router is not None else None
+
         provider = providers.get(decision.model_id)
         if provider is None:
             raise UnknownModelError(f"no provider registered for model_id={decision.model_id!r}")
 
+        prompt = state.to_prompt()
         infer_start = time.monotonic()
-        completion = provider.generate(state.to_prompt(), decision.model_params)
+        completion = provider.generate(prompt, decision.model_params)
         inference_latency_ms = (time.monotonic() - infer_start) * 1000.0
+
+        shadow_local_wall_hit = None
+        shadow_call_cost_usd = None
+        if shadow_local_provider is not None and decision.target is ModelTarget.CLOUD:
+            shadow_completion = shadow_local_provider.generate(prompt, {})
+            shadow_local_wall_hit = detect_completion_wall(shadow_completion)
+            shadow_call_cost_usd = shadow_completion.token_usage.cost_usd
 
         wall_hit = detect_completion_wall(completion)
         if wall_hit:
@@ -220,6 +249,10 @@ def run_task(
                 decision=decision,
                 wall_hit=wall_hit,
                 silent_failure=silent_failure,
+                features=features,
+                shadow_static_decision=shadow_static_decision,
+                shadow_local_wall_hit=shadow_local_wall_hit,
+                shadow_call_cost_usd=shadow_call_cost_usd,
             )
         )
 

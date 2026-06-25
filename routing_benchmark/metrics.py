@@ -29,15 +29,25 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Optional
 
-from routing_benchmark.models import AgentState, RoutingDecision, TaskCase, TokenUsage
+from routing_benchmark.models import AgentState, ModelTarget, RoutingDecision, RoutingFeatures, TaskCase, TokenUsage
 
 __all__ = ["TurnMetric", "RunResult", "KPISummary", "BaseMetricCollector"]
 
 
 @dataclass(frozen=True)
 class TurnMetric:
-    """Per-turn metric record, the atomic unit persisted to the Run Store."""
+    """Per-turn metric record, the atomic unit persisted to the Run Store.
+
+    The four ``shadow_*``/``context_occupancy_ratio`` fields back spec
+    section 5.3's static-vs-dynamic comparative metrics. All default to
+    ``None`` and are only populated when the Agent Environment is given
+    shadow-evaluation config (see ``environment.run_task``'s
+    ``shadow_static_router``/``shadow_local_provider`` parameters) --
+    a plain run without that config produces a TurnMetric identical to
+    before this field set existed.
+    """
 
     run_id: str
     turn_index: int
@@ -48,6 +58,10 @@ class TurnMetric:
     wall_hit: bool
     silent_failure_detected: bool
     token_usage: TokenUsage
+    context_occupancy_ratio: Optional[float] = None
+    shadow_static_target: Optional[ModelTarget] = None
+    shadow_local_wall_hit: Optional[bool] = None
+    shadow_call_cost_usd: Optional[float] = None
 
     @classmethod
     def from_state(
@@ -58,6 +72,10 @@ class TurnMetric:
         decision: RoutingDecision,
         wall_hit: bool,
         silent_failure: bool,
+        features: Optional[RoutingFeatures] = None,
+        shadow_static_decision: Optional[RoutingDecision] = None,
+        shadow_local_wall_hit: Optional[bool] = None,
+        shadow_call_cost_usd: Optional[float] = None,
     ) -> "TurnMetric":
         """Construct a TurnMetric from the most recently appended turn.
 
@@ -65,6 +83,16 @@ class TurnMetric:
         recorded -- it reads ``state.history[-1]`` for latencies and token
         usage, matching the order of operations in the benchmark's per-turn
         loop (append_turn happens before metric capture).
+
+        Args:
+            features: This turn's RoutingFeatures, if available, purely to
+                record ``context_occupancy_ratio`` (spec 5.3's Escalation
+                Lead Time proxy).
+            shadow_static_decision: What StaticSemanticRouter would have
+                decided for this same turn, if shadow-evaluated.
+            shadow_local_wall_hit: Result of a shadow LOCAL-provider probe,
+                only meaningful when ``decision.target`` is CLOUD.
+            shadow_call_cost_usd: Cost of that shadow probe, if made.
 
         Raises:
             ValueError: If ``state.history`` is empty.
@@ -85,6 +113,10 @@ class TurnMetric:
             wall_hit=wall_hit,
             silent_failure_detected=silent_failure,
             token_usage=last_record.completion.token_usage,
+            context_occupancy_ratio=features.context_occupancy_ratio if features is not None else None,
+            shadow_static_target=shadow_static_decision.target if shadow_static_decision is not None else None,
+            shadow_local_wall_hit=shadow_local_wall_hit,
+            shadow_call_cost_usd=shadow_call_cost_usd,
         )
 
 

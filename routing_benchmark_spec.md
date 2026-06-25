@@ -297,6 +297,49 @@ realistic, not just numerically large.
   the gap, not a pass/fail threshold (its internal routing logic is opaque
   by definition, so it serves as ceiling not target).
 
+### 5.3 Comparative Metrics: Static vs. Dynamic Routing
+
+Section 5.1's aggregate metrics (WAR, TSR, SFRR, routing overhead) answer
+"which router performed better overall," but not the more useful question
+for a production routing decision: **when, and by how much, does
+reconsidering the routing decision every turn actually pay for itself?**
+This section defines three metrics specifically for the
+StaticSemanticRouter-vs-ContextAwareRouter comparison (the
+CommercialCloudRouter is intentionally set aside here — these metrics
+assume both sides of the comparison are introspectable, which an opaque
+commercial router is not).
+
+| Metric | Formula | Capture point |
+|---|---|---|
+| Decision Divergence Rate (DDR) | `turns_where_dynamic_decision != shadow_static_decision / total_turns`, per run | Computed per turn during a ContextAwareRouter run by additionally evaluating (not executing) what StaticSemanticRouter.route() would have returned for the same RoutingRequest |
+| Escalation Precision | `true_positive_escalations / total_escalations` | A turn is an escalation when the live decision is CLOUD. `true_positive_escalations` = escalated turns where a shadow call to the LOCAL provider on the same prompt shows `detect_completion_wall` would have fired |
+| Escalation Recall | `true_positive_escalations / (true_positive_escalations + false_negative_local_wall_hits)` | `false_negative_local_wall_hits` = turns where the live decision was LOCAL (no shadow call needed -- it already *is* the ground truth) and the real `wall_hit` fired. No additional shadow calls beyond Escalation Precision's are needed: every wall-hit turn is either a real LOCAL wall hit or a shadow-probed CLOUD escalation |
+| Escalation Lead Time | `1.0 - context_occupancy_ratio` at the escalation turn, averaged over true-positive escalations | A turn-index-based lead time would require shadow-probing LOCAL on *every* turn (not just escalations) to find the first turn the wall would have hit, which is the instrumentation cost this metric exists to avoid; occupancy headroom at the moment of a confirmed-correct escalation is a cheaper, escalation-turn-only proxy for "how early" it acted -- higher headroom means it escalated well before the window was actually full |
+
+**Instrumentation cost.** Decision Divergence Rate is free — it only
+evaluates StaticSemanticRouter's pure decision function, no extra model
+call. Escalation Precision/Recall and Escalation Lead Time all derive
+from the *same* shadow call: whenever the live decision escalates to
+CLOUD, one additional call to the LOCAL provider on the same prompt
+establishes ground truth for what would have happened locally. Turns the
+live router did NOT escalate need no shadow call at all — the real
+`wall_hit` already tells us what LOCAL did. This shadow call's
+cost must be tracked separately from the run's real `total_cost_usd` — it
+is benchmarking instrumentation, not something a production deployment of
+ContextAwareRouter would ever actually pay for, and must not be allowed
+to contaminate Cost Efficiency or Routing Overhead numbers.
+
+**How to read the results.** Per spec section 1's framing, prefer the
+section 7.3 per-context-depth and per-failure-profile breakdowns over a
+single aggregate DDR/Precision/Recall number. The useful claim this
+section is built to support is shaped like: *"DDR is near-zero and both
+routers perform identically below `mid` depth; above `near_wall`, DDR
+rises sharply, Escalation Recall stays high (the dynamic router reliably
+sees the wall coming), and Escalation Lead Time (occupancy headroom) is
+consistently well above zero (it escalates with room to spare, not at the
+brink) — which is what justifies the judge's overhead at that depth and
+not below it."*
+
 ## 6. Python Code Interface / Class Signatures
 
 > No method body in this section contains implementation logic. Every
@@ -904,7 +947,11 @@ run-level aggregates (e.g. "TSR by router by context depth").
   "tool_name": "string | null",
   "silent_failure_detected": "boolean",
   "finish_reason": "string",
-  "timestamp_utc": "string (ISO-8601)"
+  "timestamp_utc": "string (ISO-8601)",
+  "shadow_static_decision_target": "string (enum: local | cloud) | null -- only populated on context_aware runs; the StaticSemanticRouter's decision for this same RoutingRequest, evaluated but not executed, per section 5.3's Decision Divergence Rate",
+  "shadow_local_wall_hit": "boolean | null -- only populated on turns where the live decision escalated to cloud; result of a shadow call to the LOCAL provider on the same prompt, per section 5.3's Escalation Precision/Recall",
+  "shadow_call_cost_usd": "float | null -- cost of the shadow_local_wall_hit call, if made; tracked separately from cost_usd so shadow-call cost never contaminates a run's real total_cost_usd",
+  "context_occupancy_ratio": "float | null -- RoutingFeatures.context_occupancy_ratio at this turn's decision point; backs section 5.3's Escalation Lead Time (occupancy headroom)"
 }
 ```
 
@@ -949,6 +996,19 @@ run-level aggregates (e.g. "TSR by router by context depth").
     "mid": { "task_success_rate": "float", "wall_avoidance_rate": "float" },
     "near_wall": { "task_success_rate": "float", "wall_avoidance_rate": "float" },
     "over_wall": { "task_success_rate": "float", "wall_avoidance_rate": "float" }
+  },
+  "comparative_static_vs_dynamic": {
+    "_comment": "Present only on the context_aware entry -- these compare it against StaticSemanticRouter using the shadow fields from turns.jsonl (section 7.1); absent/omitted entirely for static_semantic and commercial_cloud entries.",
+    "decision_divergence_rate": "float",
+    "escalation_precision": "float",
+    "escalation_recall": "float",
+    "escalation_lead_time_headroom_mean": "float",
+    "breakdown_by_context_depth": {
+      "shallow": { "decision_divergence_rate": "float", "escalation_precision": "float", "escalation_recall": "float" },
+      "mid": { "decision_divergence_rate": "float", "escalation_precision": "float", "escalation_recall": "float" },
+      "near_wall": { "decision_divergence_rate": "float", "escalation_precision": "float", "escalation_recall": "float" },
+      "over_wall": { "decision_divergence_rate": "float", "escalation_precision": "float", "escalation_recall": "float" }
+    }
   }
 }
 ```

@@ -31,10 +31,10 @@ import csv
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Union
+from typing import Any, Optional, Union
 
 from routing_benchmark.metrics import BaseMetricCollector, KPISummary, RunResult, TurnMetric
-from routing_benchmark.models import ContextDepthLevel
+from routing_benchmark.models import ContextDepthLevel, ModelTarget
 
 __all__ = ["JsonlCsvMetricCollector"]
 
@@ -110,6 +110,12 @@ class JsonlCsvMetricCollector(BaseMetricCollector):
             "wall_hit": turn_metric.wall_hit,
             "silent_failure_detected": turn_metric.silent_failure_detected,
             "timestamp_utc": _utc_now_iso(),
+            "context_occupancy_ratio": turn_metric.context_occupancy_ratio,
+            "shadow_static_decision_target": (
+                turn_metric.shadow_static_target.value if turn_metric.shadow_static_target is not None else None
+            ),
+            "shadow_local_wall_hit": turn_metric.shadow_local_wall_hit,
+            "shadow_call_cost_usd": turn_metric.shadow_call_cost_usd,
         }
         with self.turns_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
@@ -198,6 +204,76 @@ class JsonlCsvMetricCollector(BaseMetricCollector):
             sample_size=len(runs),
         )
 
+    def compute_comparative_metrics(self, router_name: str) -> Optional[dict[str, Any]]:
+        """Aggregate spec section 5.3's static-vs-dynamic comparative metrics.
+
+        Returns:
+            None if no turn recorded for this router carries a
+            ``shadow_static_target`` (i.e. no ``ShadowConfig`` was wired in
+            for it -- there is nothing to report). Otherwise a dict
+            matching ``kpi_summary.json``'s ``comparative_static_vs_dynamic``
+            block: Decision Divergence Rate, Escalation Precision/Recall,
+            Escalation Lead Time (occupancy headroom), each overall and
+            broken down by ContextDepthLevel.
+        """
+        turns = [t for t in self._turns if t.router_name == router_name]
+        if not any(t.shadow_static_target is not None for t in turns):
+            return None
+
+        depth_by_run_id = {
+            r.run_id: r.task.context_depth for r in self._runs if r.router_name == router_name
+        }
+
+        def _aggregate(subset: list[TurnMetric]) -> dict[str, float]:
+            with_shadow = [t for t in subset if t.shadow_static_target is not None]
+            divergence = (
+                sum(1 for t in with_shadow if t.shadow_static_target != t.routing_decision.target) / len(with_shadow)
+                if with_shadow
+                else float("nan")
+            )
+
+            escalated = [t for t in subset if t.routing_decision.target is ModelTarget.CLOUD]
+            true_positives = [t for t in escalated if t.shadow_local_wall_hit is True]
+            # Turns the live router did NOT escalate need no shadow call --
+            # the real wall_hit already tells us what LOCAL did. These are
+            # Escalation Recall's false negatives.
+            false_negatives = [
+                t for t in subset if t.routing_decision.target is ModelTarget.LOCAL and t.wall_hit
+            ]
+
+            precision = (len(true_positives) / len(escalated)) if escalated else float("nan")
+            recall_denominator = len(true_positives) + len(false_negatives)
+            recall = (len(true_positives) / recall_denominator) if recall_denominator else float("nan")
+
+            headrooms = [
+                1.0 - t.context_occupancy_ratio for t in true_positives if t.context_occupancy_ratio is not None
+            ]
+            lead_time = (sum(headrooms) / len(headrooms)) if headrooms else float("nan")
+
+            return {
+                "decision_divergence_rate": divergence,
+                "escalation_precision": precision,
+                "escalation_recall": recall,
+                "escalation_lead_time_headroom_mean": lead_time,
+            }
+
+        overall = _aggregate(turns)
+
+        breakdown: dict[str, dict[str, float]] = {}
+        for depth in ContextDepthLevel:
+            depth_turns = [t for t in turns if depth_by_run_id.get(t.run_id) == depth]
+            if not depth_turns:
+                continue
+            depth_metrics = _aggregate(depth_turns)
+            breakdown[depth.value] = {
+                "decision_divergence_rate": depth_metrics["decision_divergence_rate"],
+                "escalation_precision": depth_metrics["escalation_precision"],
+                "escalation_recall": depth_metrics["escalation_recall"],
+            }
+
+        overall["breakdown_by_context_depth"] = breakdown
+        return overall
+
     def write_kpi_summary(
         self,
         router_name: str,
@@ -229,7 +305,7 @@ class JsonlCsvMetricCollector(BaseMetricCollector):
         if self.kpi_summary_path.exists():
             existing = json.loads(self.kpi_summary_path.read_text(encoding="utf-8"))
 
-        existing[router_name] = {
+        entry = {
             "router_name": summary.router_name,
             "sample_size": summary.sample_size,
             "wall_avoidance_rate": summary.wall_avoidance_rate,
@@ -241,5 +317,10 @@ class JsonlCsvMetricCollector(BaseMetricCollector):
             "effective_cost_per_success_usd": summary.effective_cost_per_success_usd,
             "breakdown_by_context_depth": breakdown,
         }
+        comparative = self.compute_comparative_metrics(router_name)
+        if comparative is not None:
+            entry["comparative_static_vs_dynamic"] = comparative
+
+        existing[router_name] = entry
         self.kpi_summary_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
         return summary
