@@ -248,7 +248,10 @@ def generate_padding_turns(
     return turns
 
 
-def synthesize_dataset(seed: int) -> list[TaskCase]:
+def synthesize_dataset(
+    seed: int,
+    context_window_limit: int = DEFAULT_CONTEXT_WINDOW_LIMIT,
+) -> list[TaskCase]:
     """Synthesize the full benchmark matrix of TaskCases for one seed.
 
     Iterates every (domain, complexity, depth, failure_profile) combination
@@ -257,6 +260,13 @@ def synthesize_dataset(seed: int) -> list[TaskCase]:
     its own ``random.Random`` seeded from its deterministic id, so content
     varies with ``seed`` (for the benchmark's N_REPEATS) while the matrix's
     structural dimensions stay fixed.
+
+    ``context_window_limit`` calibrates the ContextDepthLevel padding
+    targets (see ``generate_padding_turns``) against whatever model will
+    actually run these tasks. Passing a value smaller than a real model's
+    context window (the default assumes 8192) means "near_wall" silently
+    saturates the model from turn one instead of approaching the wall
+    gradually -- a calibration bug, not a benchmark finding.
     """
     tasks: list[TaskCase] = []
     for domain in DOMAINS:
@@ -267,7 +277,9 @@ def synthesize_dataset(seed: int) -> list[TaskCase]:
                     rng = random.Random(task_id)
 
                     initial_prompt = render_prompt(domain, complexity, rng)
-                    synthetic_history = generate_padding_turns(depth, domain, rng)
+                    synthetic_history = generate_padding_turns(
+                        depth, domain, rng, context_window_limit=context_window_limit
+                    )
 
                     tasks.append(
                         TaskCase(
