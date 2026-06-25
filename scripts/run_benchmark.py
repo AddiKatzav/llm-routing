@@ -24,6 +24,14 @@ model's actual window and pass it to both dataset synthesis (so
 context_occupancy_ratio features are computed against the same number).
 No num_ctx override needed -- it already matches Ollama's default.
 
+Wires spec section 5.3's static-vs-dynamic comparative metrics
+(Decision Divergence Rate, Escalation Precision/Recall, Escalation Lead
+Time) via a ShadowConfig on the context_aware router: a second
+StaticSemanticRouter instance is shadow-evaluated every turn (free), and
+the LOCAL provider gets one extra shadow call per turn context_aware
+escalates to CLOUD (the only part of this that costs real model-call
+time/money, and only during benchmarking -- never in a real deployment).
+
 Usage:
     python scripts/run_benchmark.py --subset demo
     python scripts/run_benchmark.py --subset overnight --n-repeats 1
@@ -36,7 +44,7 @@ import dataclasses
 from pathlib import Path
 
 from routing_benchmark.dataset import synthesize_dataset
-from routing_benchmark.driver import BenchmarkDriver
+from routing_benchmark.driver import BenchmarkDriver, ShadowConfig
 from routing_benchmark.models import (
     ContextDepthLevel,
     IntentComplexity,
@@ -321,11 +329,24 @@ def main() -> None:
     }
     mock_tooling = DeterministicMockToolingLayer()
     collector = JsonlCsvMetricCollector(output_dir=output_dir)
+
+    # Spec section 5.3's comparative metrics need a *separate*
+    # StaticSemanticRouter instance to shadow-evaluate alongside the live
+    # context_aware router -- separate so its internal per-task decision
+    # cache never shares state with the one actually being swept below.
+    shadow_static_router = build_static_semantic_router()
+
     driver = BenchmarkDriver(
         providers=providers,
         mock_tooling=mock_tooling,
         metric_collector=collector,
         context_window_limit=REAL_CONTEXT_WINDOW_LIMIT,
+        shadow_configs={
+            "context_aware": ShadowConfig(
+                static_router=shadow_static_router,
+                local_model_id=LOCAL_MODEL_ID,
+            ),
+        },
     )
 
     routers: list[BaseRouter] = [
