@@ -4,7 +4,6 @@
 spec_id: routing-benchmark-001
 status: PROPOSED
 type: capability
-owner: addi katzav
 created: 2026-06-24
 target_release: v0.1.0 (benchmark-only, no production rollout)
 ```

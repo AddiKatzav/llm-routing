@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>We Built a Context-Aware LLM Router. It Worked. It Was Also 70× Too Slow.</title>
+  <style>
+    /* ── Base ─────────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --ink:       #1a1a1a;
+      --ink-light: #555;
+      --border:    #e8e8e8;
+      --accent:    #1a73e8;
+      --green:     #009E73;
+      --orange:    #E69F00;
+      --red:       #D55E00;
+      --max-w:     740px;
+    }
+
+    body {
+      font-family: 'Georgia', 'Times New Roman', serif;
+      font-size: 20px;
+      line-height: 1.72;
+      color: var(--ink);
+      background: #fff;
+      padding: 0 16px;
+    }
+
+    article { max-width: var(--max-w); margin: 0 auto; padding: 56px 0 96px; }
+
+    /* ── Headings ─────────────────────────────────────────────────────────── */
+    h1 {
+      font-size: 2.25em; font-weight: 700; line-height: 1.18;
+      letter-spacing: -0.5px; margin-bottom: 20px;
+    }
+    h2 {
+      font-size: 1.45em; font-weight: 700;
+      margin-top: 64px; margin-bottom: 18px;
+      padding-top: 8px; border-top: 2px solid var(--border);
+    }
+    h3 { font-size: 1.15em; font-weight: 700; margin-top: 36px; margin-bottom: 12px; }
+
+    /* ── Text ─────────────────────────────────────────────────────────────── */
+    p { margin-bottom: 1.4em; }
+    ul, ol { margin: 1em 0 1.6em 2em; }
+    li { margin-bottom: 0.45em; }
+    strong { font-weight: 700; color: #111; }
+    em { font-style: italic; }
+
+    code {
+      font-family: 'SFMono-Regular', 'Consolas', 'Menlo', monospace;
+      font-size: 0.82em; background: #f4f4f4;
+      padding: 2px 6px; border-radius: 3px; color: #c7254e;
+    }
+
+    pre {
+      background: #1e1e2e; color: #cdd6f4;
+      font-family: 'SFMono-Regular', 'Consolas', 'Menlo', monospace;
+      font-size: 0.8em; line-height: 1.6;
+      padding: 20px 24px; border-radius: 8px;
+      overflow-x: auto; margin: 1.6em 0 2em;
+    }
+
+    /* ── Figures ──────────────────────────────────────────────────────────── */
+    figure { margin: 2.8em 0; text-align: center; }
+
+    figure img {
+      max-width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 2px 14px rgba(0,0,0,0.08);
+    }
+
+    figcaption {
+      margin-top: 10px;
+      font-size: 0.78em; color: var(--ink-light);
+      line-height: 1.5; font-style: italic;
+    }
+    figcaption strong { font-style: normal; color: #333; }
+
+    /* ── Analogy box ──────────────────────────────────────────────────────── */
+    .analogy {
+      background: #fafafa;
+      border: 1px solid #e2e2e2;
+      border-left: 4px solid #bbb;
+      border-radius: 0 6px 6px 0;
+      padding: 14px 20px;
+      margin: -0.6em 0 2.4em;
+      font-size: 0.88em;
+      line-height: 1.65;
+      color: var(--ink-light);
+      font-family: 'Georgia', serif;
+    }
+    .analogy-label {
+      font-family: 'SFMono-Regular', 'Consolas', monospace;
+      font-size: 0.72em; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; color: #aaa;
+      display: block; margin-bottom: 5px;
+    }
+
+    /* ── Callout boxes ────────────────────────────────────────────────────── */
+    .callout {
+      border-left: 4px solid var(--accent); border-radius: 0 6px 6px 0;
+      padding: 18px 22px; margin: 2em 0; font-size: 0.93em;
+      background: #f7f9fc;
+    }
+    .callout.hypothesis { background: #eef4ff; border-color: var(--accent); }
+    .callout.finding    { background: #f0faf5; border-color: var(--green);  }
+    .callout.warning    { background: #fff8ee; border-color: var(--orange); }
+    .callout.insight    { background: #fdf0ff; border-color: #9c27b0; }
+    .callout p:last-child { margin-bottom: 0; }
+    .callout-label {
+      font-family: 'SFMono-Regular', monospace; font-size: 0.7em;
+      font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+      color: var(--ink-light); display: block; margin-bottom: 7px;
+    }
+
+    /* ── Pull quote ───────────────────────────────────────────────────────── */
+    .pull-quote {
+      font-size: 1.28em; font-style: italic; line-height: 1.42;
+      color: var(--ink); border-top: 2px solid var(--ink);
+      border-bottom: 2px solid var(--ink); padding: 20px 0;
+      margin: 2.4em 0; text-align: center;
+    }
+
+    /* ── Tables ───────────────────────────────────────────────────────────── */
+    table { width: 100%; border-collapse: collapse; margin: 1.4em 0 2em; font-size: 0.86em; }
+    th {
+      background: #f2f2f2; text-align: left;
+      padding: 10px 12px; border-bottom: 2px solid #ccc;
+      font-family: 'Georgia', serif; font-size: 0.95em;
+    }
+    td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+
+    /* ── TL;DR panel ──────────────────────────────────────────────────────── */
+    .tldr {
+      background: #f9f9f9; border: 1px solid var(--border);
+      border-radius: 8px; padding: 26px 30px; margin: 2.4em 0 3em;
+    }
+    .tldr h3 {
+      margin-top: 0; font-size: 0.85em; text-transform: uppercase;
+      letter-spacing: 1px; color: var(--ink-light);
+    }
+    .tldr ul { margin-bottom: 0; }
+
+    /* ── Numbered takeaways ───────────────────────────────────────────────── */
+    .takeaways { counter-reset: takeaway; list-style: none; margin-left: 0; }
+    .takeaways li {
+      counter-increment: takeaway; display: flex; gap: 16px;
+      margin-bottom: 1.2em; align-items: flex-start;
+    }
+    .takeaways li::before {
+      content: counter(takeaway); flex-shrink: 0;
+      width: 28px; height: 28px; background: var(--ink); color: #fff;
+      font-family: 'Georgia', serif; font-size: 0.78em; font-weight: 700;
+      border-radius: 50%; display: flex; align-items: center;
+      justify-content: center; margin-top: 3px;
+    }
+
+    /* ── Misc ─────────────────────────────────────────────────────────────── */
+    .section-divider { text-align: center; color: #ccc; font-size: 1.4em; letter-spacing: 12px; margin: 3em 0; }
+    .article-meta { font-size: 0.82em; color: var(--ink-light); margin-bottom: 36px; padding-bottom: 24px; border-bottom: 1px solid var(--border); }
+    .article-subtitle { font-size: 1.18em; color: var(--ink-light); font-style: italic; line-height: 1.45; margin-bottom: 24px; }
+    footer { margin-top: 4em; padding-top: 2em; border-top: 1px solid var(--border); font-size: 0.82em; color: var(--ink-light); line-height: 1.6; }
+  </style>
+</head>
+<body>
+<article>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     HEADER
+═══════════════════════════════════════════════════════════════════════════ -->
+<h1>We Built a Context-Aware LLM Router.<br>It Worked. It Was Also 70× Too Slow.</h1>
+
+<p class="article-subtitle">
+  A benchmark study of dynamic vs. static LLM routing for agentic sessions running on local models —
+  what we found, what we got wrong, and what it means for engineers building on-device AI.
+</p>
+
+<div class="article-meta">
+  Addi Katzav &nbsp;·&nbsp; June 2026 &nbsp;·&nbsp; ~15 min read
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     TL;DR
+═══════════════════════════════════════════════════════════════════════════ -->
+<div class="tldr">
+  <h3>TL;DR</h3>
+  <ul>
+    <li><strong>The setup:</strong> A benchmark of three LLM routing strategies for multi-turn agentic loops running entirely on local Ollama models.</li>
+    <li><strong>The result:</strong> Per-turn context-aware routing delivers a +36–44 pp improvement in Wall Avoidance Rate at high context depth.</li>
+    <li><strong>The problem:</strong> The default implementation has a p95 latency of 10,437 ms — 70× over the 150 ms spec — because it calls an LLM judge on 73% of turns.</li>
+    <li><strong>The fix:</strong> Lowering the occupancy threshold to 0.50 eliminates all LLM judge calls. p95 drops to 0.04 ms. Quality holds.</li>
+    <li><strong>The twist:</strong> The spec-compliant "context-aware" router has no LLM component at all. It's a single threshold check on a floating-point number.</li>
+    <li><strong>The open problem:</strong> 90% of cloud escalations fire after the context wall is already breached. Proactive routing remains unsolved.</li>
+  </ul>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTION 1 — THE PROBLEM
+═══════════════════════════════════════════════════════════════════════════ -->
+<h2>The Problem: Local LLMs Hit a Wall</h2>
+
+<p>
+  If you've run long agentic sessions on local models, you've seen this. Around turn 8 or 12 or 15, something changes. Responses start truncating mid-sentence. Tool call payloads come back malformed. The model starts repeating itself or produces nothing at all.
+</p>
+
+<p>
+  This is the <strong>Hard Completion Wall</strong> — a discontinuous cliff in model capability triggered by context saturation. Small models like <code>llama3.2:3b</code> have a 4,096-token context window. As that window fills, model quality doesn't gracefully degrade. It falls off a cliff.
+</p>
+
+<p>
+  The frustrating part: it's completely predictable. You can watch <code>context_occupancy_ratio</code> — prompt tokens divided by context window limit — climb toward 1.0 in real time. The wall isn't random. It's physics.
+</p>
+
+<p>
+  The standard mitigation is to escalate to a larger cloud model with more context capacity. But <em>when</em> to escalate — and how to decide — is the engineering challenge. A static router makes that call once per session based on what the task looks like at the start. It has no way to know that by turn 12, the session will be in trouble. A context-aware router re-evaluates every turn. We built one. Here's what happened.
+</p>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTION 2 — HYPOTHESIS & GOALS
+═══════════════════════════════════════════════════════════════════════════ -->
+<h2>Hypothesis, Goals, and Acceptance Criteria</h2>
+
+<div class="callout hypothesis">
+  <span class="callout-label">Hypothesis</span>
+  <p>
+    A per-turn context-aware router — one that re-evaluates routing on every agent turn based on live context state — will achieve significantly higher Wall Avoidance Rate (WAR) than a one-shot static router at high context depth, while keeping routing overhead within a latency budget suitable for interactive use.
+  </p>
+</div>
+
+<p>We defined two hard acceptance criteria:</p>
+
+<table>
+  <thead>
+    <tr><th>Criterion</th><th>Target</th><th>What it measures</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>WAR gap ≥ +15 pp</strong> at near_wall and over_wall depth</td>
+      <td>+15 percentage points</td>
+      <td>Does per-turn routing prevent more wall events than static routing?</td>
+    </tr>
+    <tr>
+      <td><strong>p95 routing latency ≤ 150 ms</strong> per turn</td>
+      <td>150 ms</td>
+      <td>Is the routing overhead acceptable for real-time agentic applications?</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  The primary goal: answer a design question facing every team building local-first AI agents. <em>Is it worth adding per-turn routing intelligence, or is a static policy good enough?</em> Secondary goals: quantify escalation quality, measure LLM judge overhead, and build enough data to design a better next iteration.
+</p>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTION 3 — SETUP
+═══════════════════════════════════════════════════════════════════════════ -->
+<h2>Experimental Setup</h2>
+
+<h3>The Three Routers</h3>
+
+<table>
+  <thead>
+    <tr><th>Router</th><th>Frequency</th><th>Strategy</th><th>Overhead</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Static Semantic</strong></td>
+      <td>Once per session</td>
+      <td>Cosine similarity of initial prompt against domain exemplars. Routes complex/ambiguous tasks to cloud; everything else stays local. Decision cached for the session.</td>
+      <td>&lt; 1 ms</td>
+    </tr>
+    <tr>
+      <td><strong>Context-Aware</strong></td>
+      <td>Every turn</td>
+      <td>Two-stage cascade: (1) <strong>Rule path</strong> — if <code>context_occupancy_ratio ≥ threshold</code>, escalate; (2) <strong>Judge path</strong> — call <code>qwen2.5:1.5b</code> on CPU, parse a <code>LOCAL</code> or <code>CLOUD</code> verdict.</td>
+      <td>&lt; 1 ms (rule) / 50 ms–24 s (judge)</td>
+    </tr>
+    <tr>
+      <td><strong>Commercial Cloud</strong></td>
+      <td>Once per session</td>
+      <td>Always routes to the larger model. No routing logic. Quality ceiling.</td>
+      <td>&lt; 1 ms</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Models (all local Ollama — no API billing)</h3>
+<table>
+  <thead><tr><th>Role</th><th>Model</th></tr></thead>
+  <tbody>
+    <tr><td>Local agent</td><td><code>llama3.2:3b</code> — 4,096-token context window</td></tr>
+    <tr><td>Cloud stand-in</td><td><code>llama3.1:8b</code> — simulates cloud escalation</td></tr>
+    <tr><td>Routing judge</td><td><code>qwen2.5:1.5b</code> — per-turn routing decisions, CPU inference</td></tr>
+  </tbody>
+</table>
+
+<h3>Tasks, Depths, and Metrics</h3>
+<p>
+  Synthetic multi-turn agentic workloads at four context depths: <strong>shallow</strong> (~10%), <strong>mid</strong> (~50%), <strong>near_wall</strong> (~85%), and <strong>over_wall</strong> (&gt;100%). Context depth was controlled by pre-filling before each run, making full sweeps tractable on a single laptop. Primary metric: <strong>Wall Avoidance Rate (WAR)</strong>. For escalation quality, we used <strong>shadow evaluation</strong> — recording what the local model would have done on every turn the router sent to cloud.
+</p>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTION 4 — FINDING 1: WAR GAIN
+═══════════════════════════════════════════════════════════════════════════ -->
+<div class="section-divider">· · ·</div>
+
+<h2>Finding 1: The Routing Works — But Only Where It Matters</h2>
+
+<figure>
+  <img src="./plots/article_figA.png"
+       alt="Line chart: WAR% across four depth levels for static semantic (blue), context-aware (green), and commercial cloud (grey). Lines converge at shallow and mid; gap opens at near_wall (+36pp) and over_wall (+44pp)." />
+  <figcaption>
+    <strong>Figure A — WAR improvement across context depth levels.</strong>
+    Static Semantic (blue) and Context-Aware (green) are indistinguishable at shallow and mid depth. The gap opens sharply at near_wall (+36 pp) and over_wall (+44 pp) — exactly where context saturation becomes a real threat. Commercial Cloud (grey dashed) is the quality ceiling. run_full_v2, threshold=0.85, n=25 per depth per router.
+  </figcaption>
+</figure>
+<div class="analogy">
+  <span class="analogy-label">In plain terms</span>
+  Think of it like a GPS rerouting system. On clear roads (shallow context), every route gets you there equally fast — the smart GPS has no advantage. It's only as traffic builds up near the city center (context fills up) that the dynamic router earns its keep, catching the congestion and rerouting around it before you're stuck.
+</div>
+
+<p>
+  At near_wall depth: WAR = 100% (context-aware) vs. 64% (static), a gap of <strong>+36 pp</strong> — more than double the acceptance threshold. At over_wall: <strong>+44 pp</strong>. Both results comfortably exceed the spec.
+</p>
+
+<p>
+  At shallow and mid depth, both routers perform identically. This makes sense: when context is at 10–50% occupancy, there's no imminent wall to avoid. The quality improvement is entirely concentrated where it should be.
+</p>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTION 5 — FINDING 2: LATENCY
+═══════════════════════════════════════════════════════════════════════════ -->
+<h2>Finding 2: The LLM Judge Makes It 70× Too Slow</h2>
+
+<p>
+  The quality result is real. The latency result is a disaster.
+</p>
+
+<figure>
+  <img src="./plots/article_figB.png"
+       alt="Horizontal bar chart showing p95 routing latency per threshold on log scale. threshold=0.50 is 0.04ms (green). Others are 6,211ms to 17,914ms (red). Spec line at 150ms." />
+  <figcaption>
+    <strong>Figure B — p95 routing latency by threshold (log scale).</strong>
+    Three out of four threshold configurations miss the 150 ms spec by 40–120×. The improvement from 0.85 → 0.65 is almost zero. The drop from 0.65 → 0.50 is dramatic: 17,914 ms to 0.04 ms. The improvement is not gradual — it's a discontinuous jump.
+  </figcaption>
+</figure>
+<div class="analogy">
+  <span class="analogy-label">In plain terms</span>
+  Routing at threshold=0.85 is like directing every hotel guest to a receptionist who has to call corporate headquarters to verify their booking. The call takes 50 ms to 24 seconds. threshold=0.50 is the self-check-in kiosk: scan your code, door opens in 0.04 ms. Both paths get you to your room. One makes you miss everything scheduled after arrival.
+</div>
+
+<p>
+  The root cause is the architecture. The context-aware router's two decision paths have wildly different cost profiles:
+</p>
+<ul>
+  <li><strong>Rule path:</strong> check <code>context_occupancy_ratio ≥ threshold</code>, escalate if true. Deterministic, &lt; 1 ms.</li>
+  <li><strong>Judge path:</strong> call <code>qwen2.5:1.5b</code> on CPU to reason about current turn state, parse a one-word verdict. 50 ms to 24 s.</li>
+</ul>
+
+<p>
+  At threshold=0.85, <strong>73% of all turns invoke the judge</strong>. Mid-depth tasks (starting at ~50% occupancy) never reach the 0.85 threshold, so they always go to the judge. Those turns own the entire latency tail.
+</p>
+
+<figure>
+  <img src="./plots/article_figC.png"
+       alt="Stacked bar chart: green (rule path) vs orange (judge path %) for each threshold. threshold=0.50 is 100% green. All others show 26% green, 74% orange." />
+  <figcaption>
+    <strong>Figure C — Routing composition: rule path vs. LLM judge path.</strong>
+    At threshold=0.50, 100% of turns go through the instant rule path. At 0.65, 0.80, and 0.85, ~74% still invoke the LLM judge — because mid-depth tasks sit below all three thresholds. There is essentially no difference between 0.65 and 0.85 in composition.
+  </figcaption>
+</figure>
+<div class="analogy">
+  <span class="analogy-label">In plain terms</span>
+  An airport security checkpoint with two lanes: PreCheck (instant scanner, rule path) and Standard (secondary screening room, LLM judge, takes minutes). At threshold=0.50, everyone goes through PreCheck. At 0.65–0.85, 74% of passengers are still redirected to the slow lane — even the ones just carrying a phone and a coffee.
+</div>
+
+<h3>Why the Improvement Is Discontinuous</h3>
+
+<p>
+  Lowering the threshold from 0.85 to 0.65 barely changes anything. Why? Mid-depth tasks start at ~50% occupancy. 50% is below 0.65, so the judge still fires on all of them. The only way to stop the judge from firing on those tasks is to set the threshold at or below 0.50.
+</p>
+
+<div class="callout warning">
+  <span class="callout-label">Non-Obvious Engineering Insight</span>
+  <p>The latency benefit from threshold tuning is <strong>a phase transition, not a smooth curve</strong>. You're either above or below the occupancy floor of your task distribution. Find the minimum occupancy that any task starts at, and set your threshold below it. Anything higher and you're still paying full judge cost on all those tasks.</p>
+</div>
+
+<figure>
+  <img src="./plots/article_figD.png"
+       alt="Overlaid CDF on log x-axis. threshold=0.50 (green) is a near-vertical spike at sub-1ms. threshold=0.85 (red) has a plateau at 26% then a long tail extending to 24,000ms. 150ms spec line shown." />
+  <figcaption>
+    <strong>Figure D — Latency CDF: threshold=0.50 vs threshold=0.85 (two extremes only).</strong>
+    threshold=0.50 (green): a vertical step function — 100% of turns complete in under 1 ms. threshold=0.85 (red): 26% of turns are fast (the rule-path turns), then a heavy tail that extends to 24 seconds. The 150 ms spec line (dashed) sits in the flat middle of the red line, well before the tail begins.
+  </figcaption>
+</figure>
+<div class="analogy">
+  <span class="analogy-label">In plain terms</span>
+  Two checkout queues at a supermarket. The green queue has an automatic scanner: every customer is done in under a second, and the line always moves. The red queue has a scanner for 26% of customers, but sends the other 74% to a cashier who manually price-checks every item. The p95 customer — the one who determines whether the store closes on time — is always in the red queue.
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTION 6 — THE PREEMPTION QUESTION
+═══════════════════════════════════════════════════════════════════════════ -->
+<h2>Is the Quality Gain Real? (The Pre-emption Question)</h2>
+
+<p>
+  A reasonable challenge to the +36 pp WAR result: most of it came from <strong>pre-emption</strong>. Of the 25 context-aware runs at near_wall depth, <strong>22 had zero turns</strong>. The router detected high initial occupancy, escalated before a single agent turn executed, and logged a wall-free run — because there were no turns to wall on. Only 3 runs involved actual mid-task routing.
+</p>
+
+<p>
+  Is this a real protective capability, or just a tidy accounting artifact?
+</p>
+
+<figure>
+  <img src="./plots/article_figE.png"
+       alt="Three bars at near_wall depth: Static Semantic 64%, Context-Aware all runs 100%, Context-Aware excl. pre-empted (only 3 runs) 100%. Gap annotation +36pp." />
+  <figcaption>
+    <strong>Figure E — Pre-emption ablation: does removing pre-empted runs change the conclusion?</strong>
+    The third bar shows WAR for the 3 context-aware runs that actually executed agent turns. They also achieve 100% WAR. Removing the 22 pre-empted runs does not change the result — and the 3 remaining runs still comfortably exceed the spec. The gain is genuine.
+  </figcaption>
+</figure>
+<div class="analogy">
+  <span class="analogy-label">In plain terms</span>
+  A fire marshal who refuses to let people into an already-dangerous venue (pre-emption) and one who evacuates mid-event (mid-task escalation) both prevent harm — at different moments. The question was: if we only count events where people actually went inside, does the safety record still hold? It does. Both mechanisms work.
+</div>
+
+<div class="callout finding">
+  <span class="callout-label">Key Finding</span>
+  <p>
+    The adjusted WAR gap (excluding pre-empted runs) equals the reported gap. Pre-emption is a legitimate protective mechanism, not an accounting trick. Refusing to start a doomed session is good routing. The +36 pp gain holds.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTION 7 — FINDING 3: ESCALATION QUALITY
+═══════════════════════════════════════════════════════════════════════════ -->
+<h2>Finding 3: The Router Escalates at the Wrong Time</h2>
+
+<p>
+  Even setting aside the latency problem, the router's escalation timing has a deeper structural flaw. We used <strong>shadow evaluation</strong> — recording what the local model would have produced on every turn the router sent to cloud — to get ground-truth labels for escalation quality.
+</p>
+
+<figure>
+  <img src="./plots/article_figF.png"
+       alt="Histogram of lead-time headroom at escalation. Red bars dominate (negative headroom = past the wall). Only a few green bars (positive = before the wall). Mean = -2.08. Label: 90% of escalations fire after the wall." />
+  <figcaption>
+    <strong>Figure F — When does the router escalate?</strong>
+    Lead-time headroom = 1 − context occupancy ratio at escalation. Positive = still room remaining (proactive). Negative = already past the wall (reactive). The distribution is dominated by red bars. Mean headroom = −2.08: the average escalation happens when context is already 3× capacity. 90% of escalations are reactive.
+  </figcaption>
+</figure>
+<div class="analogy">
+  <span class="analogy-label">In plain terms</span>
+  This is a smoke alarm that mostly triggers after the furniture has already caught fire, not when the first whiff of smoke appears. The alarm still alerts you — so the house eventually gets evacuated — but by the time it sounds, the dining room is gone. A proactive alarm would detect rising temperature trends and alert before ignition.
+</div>
+
+<p>Two numbers from shadow evaluation define the problem:</p>
+<ul>
+  <li><strong>Escalation Precision = 21%.</strong> Of 62 cloud escalations, only 13 were actually necessary. The other 49 were wasted cloud calls.</li>
+  <li><strong>Mean Lead Time Headroom = −2.08.</strong> The router escalates, on average, when context is already 3× over capacity.</li>
+</ul>
+
+<p>
+  The mechanism is structural. The rule <code>occupancy_ratio ≥ threshold</code> fires on <em>current</em> state. By the time current occupancy reaches 0.85, the model has been degrading for several turns. The signal lags the failure.
+</p>
+
+<div class="callout insight">
+  <span class="callout-label">The Design Problem</span>
+  <p>Context saturation is a trajectory problem, not a state problem. What matters is not where you are right now, but where you're going. A session at 70% occupancy on turn 3 of a 20-turn task will hit the wall. A session at 70% on turn 18 of a 20-turn task won't. The current rule cannot distinguish them.</p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTION 8 — SYNTHESIS: PARETO FRONTIER
+═══════════════════════════════════════════════════════════════════════════ -->
+<h2>The Full Picture: Every Configuration in One View</h2>
+
+<figure>
+  <img src="./plots/article_figG.png"
+       alt="Pareto scatter on log x-axis. CA@0.50 (green) and Commercial Cloud (black diamond) are inside the green spec-compliant zone. CA@0.65, 0.80, 0.85 are far right with bad latency. Static Semantic is at y=0." />
+  <figcaption>
+    <strong>Figure G — Pareto frontier: p95 latency vs. WAR gain.</strong>
+    Each point is a router configuration. x-axis is p95 latency (log scale, note 8 orders of magnitude). y-axis is WAR gap vs. static at near_wall. The green zone is spec-compliant (both criteria met). Only CA@0.50 and Commercial Cloud land inside it — for very different reasons. All other context-aware configurations are stranded at the right: good quality, unacceptable latency.
+  </figcaption>
+</figure>
+<div class="analogy">
+  <span class="analogy-label">In plain terms</span>
+  A map of neighborhoods where you want to live in the lower-left corner: fast commute (low latency) and safe (high WAR gain). Most configurations are in the upper-right suburb — safe but a 3-hour commute. Only CA@0.50 makes it into the green zone in the lower-left. Commercial Cloud also lives there, but only because it never uses the local model at all. That's not routing; it's opting out.
+</div>
+
+<p>The Pareto view makes two things explicit that weren't obvious from the individual findings:</p>
+
+<p>
+  <strong>The latency axis is 5 orders of magnitude more sensitive than the quality axis.</strong> Between threshold=0.50 and threshold=0.65, the WAR gap changes by about 1 pp. The p95 latency changes by a factor of 440,000×. Latency is a cliff; quality is a plateau. This asymmetry is the central design lesson.
+</p>
+
+<div class="pull-quote">
+  "The spec-compliant version of our context-aware router has no LLM component.<br>
+  You don't need a language model to read a number."
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTION 9 — WHAT THIS MEANS FOR ENGINEERS
+═══════════════════════════════════════════════════════════════════════════ -->
+<h2>What This Means for AI &amp; Software Engineers</h2>
+
+<h3>The LLM-as-Judge Trap in Hot Paths</h3>
+<p>
+  Using an LLM to make routing decisions is an intuitive first move. But this experiment exposes a consistent failure pattern across three dimensions: it's slow (50 ms–24 s per call), its precision is poor (21%), and it reads current state rather than forecasted trajectory. The same failure pattern applies wherever you put an LLM in a hot path — as a router, validator, or guardrail. If you need sub-100 ms decisions, an LLM in the critical path is almost certainly the wrong architecture.
+</p>
+
+<h3>Shadow Evaluation: The Measurement Tool You're Probably Missing</h3>
+<p>
+  The most useful methodological contribution here: shadow evaluation. On every routing decision, record what would have happened with the other choice. This gives per-decision quality labels without running separate A/B tests.
+</p>
+<p>
+  In this experiment, shadow metrics revealed that 79% of cloud escalations were unnecessary — invisible to standard task-level metrics, which showed 100% WAR. Without per-decision labels, you can't distinguish a precision problem (escalating when you don't need to) from a recall problem (missing real escalations). Build shadow evaluation into your routing infrastructure from day one.
+</p>
+
+<h3>Route on Trajectory, Not on Current State</h3>
+<p>
+  The right question is not "is occupancy above X right now?" but "will we breach the wall before this task finishes?" That's a forecasting question with a deterministic, sub-millisecond answer:
+</p>
+
+<pre>projected_final_occupancy = current_occupancy + (tokens_per_turn_velocity × expected_remaining_turns)
+if projected_final_occupancy > 0.90:
+    route_to_cloud()
+</pre>
+
+<p>
+  No model calls. Deterministic. Directly fixes the −2.08 mean lead-time headroom — escalating while there's still context budget left, not after it's blown.
+</p>
+
+<h3>Routing and Context Management Are Complementary</h3>
+<p>
+  Task Success Rate was near zero at high context depth for all routers, even at 100% WAR. The router prevented wall crashes — but didn't make complex tasks succeed. Both models failed on multi-tool tasks at saturated context. Routing buys you wall avoidance. Context pruning, summarization, and retrieval buy you task completion. You need both.
+</p>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTION 10 — NEXT STEPS
+═══════════════════════════════════════════════════════════════════════════ -->
+<h2>What We'd Build Next</h2>
+
+<h3>1. Velocity-Based Forecasting Rule</h3>
+<p>Replace the static occupancy check with a trajectory-based rule using tokens-per-turn velocity × expected remaining turns. Deterministic, sub-millisecond, directly addresses the reactive timing problem. Highest-leverage change with no infrastructure investment.</p>
+
+<h3>2. Composite Routing Score</h3>
+<p>Combine occupancy, velocity, and lightweight embedding distance from high-complexity task exemplars into a single scalar. No model calls. Could improve precision by adding semantic signal in the one place it might genuinely help — task type — rather than per-turn state.</p>
+
+<h3>3. Offline Classifier from Shadow Labels</h3>
+<p>Shadow evaluation generates ground-truth labels for where the local model would have wall-hit. Those labels are training data for a small binary classifier. Challenge: successful routing prevents the failures needed as positive labels, requiring controlled "let it fail" evaluation runs.</p>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTION 11 — TAKEAWAYS
+═══════════════════════════════════════════════════════════════════════════ -->
+<h2>Key Takeaways for AI &amp; Software Engineers</h2>
+
+<ol class="takeaways">
+  <li>
+    <div><strong>The context wall is real and measurable.</strong> Instrument your agentic sessions with <code>context_occupancy_ratio</code>. If it's climbing past 0.7 on multi-turn tasks, wall events are coming. This is deterministic, not probabilistic.</div>
+  </li>
+  <li>
+    <div><strong>Per-turn routing delivers large quality improvements at high context depth.</strong> The +36–44 pp WAR gain is real, survives ablation, and substantially exceeds the acceptance threshold. The capability is worth building.</div>
+  </li>
+  <li>
+    <div><strong>Don't put an LLM in your routing hot path.</strong> An LLM judge call on CPU adds 50 ms–24 s to every decision that hits it. At any non-trivial invocation rate, your p95 is in seconds. This is an architecture constraint, not a tuning knob.</div>
+  </li>
+  <li>
+    <div><strong>Threshold tuning is a phase transition, not a curve.</strong> Find the minimum occupancy in your task distribution and set the threshold below it. Anything higher and you're still paying full judge cost.</div>
+  </li>
+  <li>
+    <div><strong>Route on trajectory, not on current state.</strong> Context occupancy is a lagging indicator. A tokens-per-turn velocity forecast is deterministic, sub-millisecond, and directly addresses the timing problem that makes 90% of escalations reactive.</div>
+  </li>
+  <li>
+    <div><strong>Escalation precision matters as much as recall.</strong> 79% of cloud escalations were unnecessary here. Wasted escalations cost inference budget and add latency. Shadow evaluation is the only way to see this — task-level metrics are blind to it.</div>
+  </li>
+  <li>
+    <div><strong>Pre-emption is a valid routing outcome.</strong> A router that refuses to start a session in an unrecoverable context state is doing its job. Count zero-turn pre-empted runs as routing successes, not as missing data.</div>
+  </li>
+  <li>
+    <div><strong>Routing and context management are not alternatives.</strong> Routing prevents wall crashes. Context pruning, summarization, and retrieval prevent capability degradation within the window. You need both for reliable long-running agents.</div>
+  </li>
+  <li>
+    <div><strong>Build shadow evaluation from the start.</strong> Measure per-decision quality (was this the right routing choice?) not just per-task outcome (did the task succeed?). The gap between them contains most of the actionable signal for improving your router.</div>
+  </li>
+  <li>
+    <div><strong>The simplest version is often the right one.</strong> A single <code>if occupancy &gt;= 0.50: route_to_cloud()</code>, evaluated every turn, matched the full LLM-judge system on every quality metric at 260,000× lower p95 latency. Start simple. Add complexity only when data demands it.</div>
+  </li>
+</ol>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     CLOSING
+═══════════════════════════════════════════════════════════════════════════ -->
+<div class="section-divider">· · ·</div>
+
+<h2>Conclusion</h2>
+
+<p>
+  The hypothesis held: per-turn context-aware routing genuinely improves wall avoidance at high context depth. The +36–44 pp gain is real. But the best version of "context-aware routing" that fits within a real latency budget turned out to have no context-awareness in the LLM sense. It checks one number, compares it to a threshold, and decides in 0.04 ms.
+</p>
+
+<p>
+  That's not a failure of the experiment — it's a precise diagnosis. The completion wall is a token-count problem. Token counts are numbers. Numbers don't need language models to interpret them. The semantic sophistication we added with the LLM judge was solving the wrong problem.
+</p>
+
+<p>
+  The problem still worth solving is <em>proactive</em> routing: escalating before the wall, not after. That requires forecasting context growth, not measuring its current state. It's a trajectory prediction problem, and the right tool is probably a velocity rule or a small offline classifier — not a language model in the hot path.
+</p>
+
+<p>
+  If you're building agentic systems on local models: start with <code>context_occupancy_ratio</code> and a threshold check. A single line of instrumentation gets you most of the way there. The more sophisticated architecture is worth building — just build it in the right order.
+</p>
+
+<footer>
+  <p>
+    <strong>Experimental details:</strong> All models run locally via Ollama (<code>llama3.2:3b</code> local, <code>llama3.1:8b</code> cloud stand-in, <code>qwen2.5:1.5b</code> judge — CPU inference only). No external API billing. Main experiment: n=100 per router (static semantic, context-aware), n=95 commercial cloud, threshold=0.85. Threshold sweep: n=36–60 per threshold, 2-domain/2-depth subset. Confidence intervals on WAR proportions ±~14 pp at 95% (n=25 per cell); all reported gaps exceed this margin. Platform: WSL2, consumer laptop, CPU-only inference.
+  </p>
+  <p style="margin-top:1em;">
+    Figures generated from <code>scripts/article_plots.py</code>. Analysis from <code>scripts/article_analysis.py</code>. Benchmark harness: <code>routing_benchmark/</code> Python package.
+  </p>
+</footer>
+
+</article>
+</body>
+</html>

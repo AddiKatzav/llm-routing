@@ -1,5 +1,6 @@
 import pytest
 
+from conftest import make_completion, make_task
 from routing_benchmark.environment import (
     UnknownModelError,
     detect_completion_wall,
@@ -22,29 +23,6 @@ from routing_benchmark.models import (
 from routing_benchmark.provider import BaseModelProvider
 from routing_benchmark.router import BaseRouter
 from routing_benchmark.tooling import BaseMockToolingLayer
-
-
-def make_task(expected_tool_calls: int = 1, max_turns: int = 5, complexity=IntentComplexity.MODERATE) -> TaskCase:
-    return TaskCase(
-        id="task-1",
-        domain="data_lookup",
-        complexity=complexity,
-        initial_prompt="Find the Q3 revenue figure.",
-        synthetic_history=[],
-        failure_profile=ToolFailureProfile.NONE,
-        max_turns=max_turns,
-        expected_tool_calls=expected_tool_calls,
-    )
-
-
-def make_completion(text=None, tool_call=None, finish_reason="stop", prompt_tokens=10, completion_tokens=5):
-    return CompletionResult(
-        text=text,
-        tool_call=tool_call,
-        finish_reason=finish_reason,
-        token_usage=TokenUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, cost_usd=0.001),
-        provider_latency_ms=10.0,
-    )
 
 
 # ---------------------------------------------------------------------------

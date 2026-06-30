@@ -1,5 +1,6 @@
 import pytest
 
+from conftest import make_task
 from routing_benchmark.models import (
     AgentState,
     CompletionResult,
@@ -14,19 +15,6 @@ from routing_benchmark.models import (
     ToolResult,
     TokenUsage,
 )
-
-
-def make_task(max_turns: int = 3) -> TaskCase:
-    return TaskCase(
-        id="task-1",
-        domain="data_lookup",
-        complexity=IntentComplexity.MODERATE,
-        initial_prompt="Find the Q3 revenue figure.",
-        synthetic_history=[],
-        failure_profile=ToolFailureProfile.NONE,
-        max_turns=max_turns,
-        expected_tool_calls=1,
-    )
 
 
 def make_token_usage(prompt=10, completion=5, cost=0.001) -> TokenUsage:

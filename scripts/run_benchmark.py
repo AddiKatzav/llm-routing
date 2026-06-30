@@ -35,6 +35,9 @@ time/money, and only during benchmarking -- never in a real deployment).
 Usage:
     python scripts/run_benchmark.py --subset demo
     python scripts/run_benchmark.py --subset overnight --n-repeats 1
+    python scripts/run_benchmark.py --subset overnight --n-repeats 5
+    python scripts/run_benchmark.py --subset threshold_tuning --wall-threshold 0.65 --output-dir run_tuned_065
+    python scripts/run_benchmark.py --subset threshold_tuning --wall-threshold 0.70 --output-dir run_tuned_070
 """
 
 from __future__ import annotations
@@ -89,6 +92,10 @@ JUDGE_GENERATION_OPTIONS = {"num_predict": 16, "temperature": 0.0}
 # budget that an unattended overnight run (no one watching to retry)
 # warrants more headroom.
 REQUEST_TIMEOUT_S = 300.0
+# Judge generates at most 16 tokens from a 1.5B model; 120s is generous even
+# on CPU-only. Kept well under REQUEST_TIMEOUT_S so the SIGALRM in
+# _default_post_json fires on judge hangs before the main-model budget expires.
+JUDGE_REQUEST_TIMEOUT_S = 120.0
 JUDGE_TIMEOUT_MS = 90_000.0
 
 # A generic, domain-agnostic tool so models that support function calling
@@ -183,6 +190,10 @@ def select_subset_demo(tasks: list[TaskCase]) -> list[TaskCase]:
 # one of 8 turns -- so capping max_turns for those depths loses no real
 # signal.
 OVERNIGHT_MAX_TURNS_CAP = 2
+# Domains included in threshold_tuning sweeps. Routing decisions are based on
+# context occupancy, not task content, so 2 structurally distinct domains are
+# sufficient signal. Reduces per-sweep runs from 345 to 108.
+THRESHOLD_TUNING_DOMAINS = ("file_edit_simulation", "data_lookup")
 
 
 def select_subset_overnight(tasks: list[TaskCase]) -> list[TaskCase]:
@@ -191,11 +202,10 @@ def select_subset_overnight(tasks: list[TaskCase]) -> list[TaskCase]:
     Every (domain x complexity x depth) combination at failure_profile=NONE
     (4 x 3 x 4 = 48 tasks) -- the full structural matrix minus the
     failure-injection dimension -- plus, for each domain at
-    complexity=MODERATE/depth=SHALLOW, the two silent-failure profiles (4 x 2
-    = 8 tasks). 56 tasks total; see select_subset_demo for the smaller,
-    faster slice this was scoped down from. near_wall/over_wall tasks have
-    their max_turns capped (see OVERNIGHT_MAX_TURNS_CAP) to bound worst-case
-    run time.
+    complexity=MODERATE/depth=SHALLOW, all three failure profiles including
+    the loud_failure control condition (4 x 3 = 12 tasks). 60 tasks total.
+    near_wall/over_wall tasks have their max_turns capped (see
+    OVERNIGHT_MAX_TURNS_CAP) to bound worst-case run time.
     """
     baseline_full = [
         t
@@ -209,7 +219,11 @@ def select_subset_overnight(tasks: list[TaskCase]) -> list[TaskCase]:
         if t.complexity == IntentComplexity.MODERATE
         and t.context_depth == ContextDepthLevel.SHALLOW
         and t.failure_profile
-        in (ToolFailureProfile.SINGLE_SILENT_FAILURE, ToolFailureProfile.CASCADING_SILENT_FAILURES)
+        in (
+            ToolFailureProfile.SINGLE_SILENT_FAILURE,
+            ToolFailureProfile.CASCADING_SILENT_FAILURES,
+            ToolFailureProfile.LOUD_FAILURE,
+        )
     ]
 
     selected = baseline_full + failure_variants
@@ -221,9 +235,34 @@ def select_subset_overnight(tasks: list[TaskCase]) -> list[TaskCase]:
     ]
 
 
+def select_subset_threshold_tuning(tasks: list[TaskCase]) -> list[TaskCase]:
+    """Targeted subset for threshold-tuning runs: only depths where the
+    wall_proximity_threshold rule matters (mid and near_wall), with no
+    failure injection (failure_profile=NONE) and max_turns capped.
+
+    This is much faster than the full overnight subset and isolates the
+    signal that matters for tuning: whether escalation happens before the
+    wall (positive lead-time headroom) vs. at/after it.
+    """
+    selected = [
+        t
+        for t in tasks
+        if t.failure_profile == ToolFailureProfile.NONE
+        and t.context_depth in (ContextDepthLevel.MID, ContextDepthLevel.NEAR_WALL)
+        and t.domain in THRESHOLD_TUNING_DOMAINS
+    ]
+    return [
+        dataclasses.replace(t, max_turns=min(t.max_turns, OVERNIGHT_MAX_TURNS_CAP))
+        if t.context_depth == ContextDepthLevel.NEAR_WALL
+        else t
+        for t in selected
+    ]
+
+
 SUBSETS = {
     "demo": select_subset_demo,
     "overnight": select_subset_overnight,
+    "threshold_tuning": select_subset_threshold_tuning,
 }
 
 
@@ -261,17 +300,17 @@ def build_static_semantic_router() -> StaticSemanticRouter:
     )
 
 
-def build_context_aware_router() -> ContextAwareRouter:
+def build_context_aware_router(wall_proximity_threshold: float = 0.85) -> ContextAwareRouter:
     judge = OllamaProvider(
         model_id=JUDGE_MODEL_ID,
         default_options=JUDGE_GENERATION_OPTIONS,
         tools=None,
-        timeout_s=REQUEST_TIMEOUT_S,
+        timeout_s=JUDGE_REQUEST_TIMEOUT_S,
     )
     return ContextAwareRouter(
         local_judge_model=judge,
         escalation_threshold=2,
-        wall_proximity_threshold=0.85,
+        wall_proximity_threshold=wall_proximity_threshold,
         local_model_id=LOCAL_MODEL_ID,
         cloud_model_id=CLOUD_STANDIN_MODEL_ID,
         # Spec section 5.2's <=150ms p95 target is a production aspiration
@@ -299,6 +338,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=None, help="Defaults to results/run_<subset>")
     parser.add_argument("--n-repeats", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--wall-threshold",
+        type=float,
+        default=0.85,
+        help=(
+            "wall_proximity_threshold for ContextAwareRouter (default: 0.85). "
+            "Lower values (e.g. 0.65) escalate earlier, reducing judge calls at "
+            "near_wall/over_wall depths and improving escalation lead-time headroom. "
+            "Recommended tuning range: 0.60–0.80."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -351,11 +401,11 @@ def main() -> None:
 
     routers: list[BaseRouter] = [
         build_static_semantic_router(),
-        build_context_aware_router(),
+        build_context_aware_router(wall_proximity_threshold=args.wall_threshold),
         build_commercial_cloud_router(),
     ]
 
-    print(f"subset={args.subset} n_repeats={args.n_repeats} output_dir={output_dir}")
+    print(f"subset={args.subset} n_repeats={args.n_repeats} wall_threshold={args.wall_threshold} output_dir={output_dir}")
     print(f"Running {len(tasks)} tasks x {len(routers)} routers x {args.n_repeats} repeats "
           f"= {len(tasks) * len(routers) * args.n_repeats} runs...")
     for task in tasks:

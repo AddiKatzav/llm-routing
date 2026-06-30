@@ -1,6 +1,7 @@
 import pytest
 
-from routing_benchmark.metrics import BaseMetricCollector, KPISummary, RunResult, TurnMetric
+from conftest import make_completion, make_decision, make_task
+from routing_benchmark.metrics import BaseMetricCollector, KPISummary, RunResult, TurnMetric, compute_kpis
 from routing_benchmark.models import (
     AgentState,
     CompletionResult,
@@ -13,33 +14,6 @@ from routing_benchmark.models import (
     ToolResult,
     TokenUsage,
 )
-
-
-def make_task(expected_tool_calls: int = 1, max_turns: int = 5) -> TaskCase:
-    return TaskCase(
-        id="task-1",
-        domain="data_lookup",
-        complexity=IntentComplexity.MODERATE,
-        initial_prompt="Find the Q3 revenue figure.",
-        synthetic_history=[],
-        failure_profile=ToolFailureProfile.NONE,
-        max_turns=max_turns,
-        expected_tool_calls=expected_tool_calls,
-    )
-
-
-def make_decision(target=ModelTarget.LOCAL) -> RoutingDecision:
-    return RoutingDecision(target=target, model_id="llama3.1:8b", reason="static")
-
-
-def make_completion(tool_call=None, cost=0.001) -> CompletionResult:
-    return CompletionResult(
-        text=None if tool_call else "done",
-        tool_call=tool_call,
-        finish_reason="tool_calls" if tool_call else "stop",
-        token_usage=TokenUsage(prompt_tokens=10, completion_tokens=5, cost_usd=cost),
-        provider_latency_ms=50.0,
-    )
 
 
 def append_tool_turn(state: AgentState, tool_name: str, tool_result: ToolResult, cost=0.001) -> None:
@@ -225,38 +199,8 @@ class InMemoryMetricCollector(BaseMetricCollector):
 
     def compute_kpis(self, router_name: str) -> KPISummary:
         runs = [r for r in self.runs if r.router_name == router_name]
-        if not runs:
-            raise ValueError(f"no runs recorded for router {router_name}")
-
         turns = [t for t in self.turns if t.router_name == router_name]
-        routing_latencies = sorted(t.routing_latency_ms for t in turns)
-
-        def percentile(data, pct):
-            if not data:
-                return 0.0
-            k = (len(data) - 1) * pct
-            f, c = int(k), min(int(k) + 1, len(data) - 1)
-            return data[f] + (data[c] - data[f]) * (k - f)
-
-        wall_avoidance_rate = 1 - (sum(1 for r in runs if r.wall_events > 0) / len(runs))
-        task_success_rate = sum(1 for r in runs if r.success) / len(runs)
-        injected = sum(r.silent_failures_injected for r in runs)
-        recovered = sum(r.silent_failures_recovered for r in runs)
-        sfrr = (recovered / injected) if injected else 1.0
-        total_cost = sum(r.total_cost_usd for r in runs)
-        successful = sum(1 for r in runs if r.success)
-
-        return KPISummary(
-            router_name=router_name,
-            wall_avoidance_rate=wall_avoidance_rate,
-            routing_overhead_p50_ms=percentile(routing_latencies, 0.5),
-            routing_overhead_p95_ms=percentile(routing_latencies, 0.95),
-            task_success_rate=task_success_rate,
-            silent_failure_recovery_rate=sfrr,
-            cost_efficiency=0.0,
-            effective_cost_per_success_usd=(total_cost / successful) if successful else float("inf"),
-            sample_size=len(runs),
-        )
+        return compute_kpis(router_name, runs, turns)
 
 
 def test_concrete_collector_satisfies_contract_and_computes_kpis():

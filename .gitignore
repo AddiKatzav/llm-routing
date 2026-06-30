@@ -3,3 +3,10 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
+results/
+plots/
+.claude/
+SESSION_NOTES.md
+DOC_NOTES.md
+ANALYSIS_PLAN.md
+NEXT_STEPS.md

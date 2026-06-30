@@ -16,6 +16,7 @@ running -- see ``tests/test_ollama_provider.py``.
 from __future__ import annotations
 
 import json
+import signal
 import time
 import urllib.error
 import urllib.request
@@ -36,11 +37,23 @@ def _default_post_json(url: str, payload: dict[str, Any], timeout_s: float) -> d
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    # signal.alarm provides a hard deadline that fires even when urllib's
+    # socket-level timeout fails to preempt a blocking recv() call — observed
+    # on WSL2 where an ESTAB Ollama connection can sit indefinitely without
+    # sending data and without triggering the socket timeout.
+    def _alarm_handler(signum, frame):
+        raise TimeoutError(f"ollama call to {url} exceeded {timeout_s:.0f}s hard limit")
+
+    old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
+    signal.alarm(max(1, int(timeout_s) + 1))
     try:
         with urllib.request.urlopen(request, timeout=timeout_s) as response:
             return json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
         raise ProviderUnavailableError(f"ollama request to {url} failed: {exc}") from exc
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 class OllamaProvider(BaseModelProvider):

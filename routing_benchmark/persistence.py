@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from routing_benchmark.metrics import BaseMetricCollector, KPISummary, RunResult, TurnMetric
+from routing_benchmark.metrics import BaseMetricCollector, KPISummary, RunResult, TurnMetric, compute_kpis
 from routing_benchmark.models import ContextDepthLevel, ModelTarget
 
 __all__ = ["JsonlCsvMetricCollector"]
@@ -60,15 +60,6 @@ _RUNS_CSV_FIELDS = [
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _percentile(sorted_values: list[float], pct: float) -> float:
-    """Linear-interpolated percentile over an already-sorted list."""
-    if not sorted_values:
-        return 0.0
-    rank = (len(sorted_values) - 1) * pct
-    lower, upper = int(rank), min(int(rank) + 1, len(sorted_values) - 1)
-    return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * (rank - lower)
 
 
 class JsonlCsvMetricCollector(BaseMetricCollector):
@@ -170,39 +161,8 @@ class JsonlCsvMetricCollector(BaseMetricCollector):
                 NaN rather than silently defaulting to 0.0.
         """
         runs = [r for r in self._runs if r.router_name == router_name]
-        if not runs:
-            raise ValueError(f"no runs recorded for router {router_name!r}")
-
         turns = [t for t in self._turns if t.router_name == router_name]
-        routing_latencies = sorted(t.routing_latency_ms for t in turns)
-
-        wall_avoidance_rate = 1 - (sum(1 for r in runs if r.wall_events > 0) / len(runs))
-        task_success_rate = sum(1 for r in runs if r.success) / len(runs)
-
-        injected = sum(r.silent_failures_injected for r in runs)
-        recovered = sum(r.silent_failures_recovered for r in runs)
-        silent_failure_recovery_rate = (recovered / injected) if injected else 1.0
-
-        total_cost = sum(r.total_cost_usd for r in runs)
-        successful = sum(1 for r in runs if r.success)
-        effective_cost_per_success = (total_cost / successful) if successful else float("inf")
-
-        if all_cloud_baseline_cost_usd is not None and all_cloud_baseline_cost_usd > 0:
-            cost_efficiency = 1 - (total_cost / all_cloud_baseline_cost_usd)
-        else:
-            cost_efficiency = float("nan")
-
-        return KPISummary(
-            router_name=router_name,
-            wall_avoidance_rate=wall_avoidance_rate,
-            routing_overhead_p50_ms=_percentile(routing_latencies, 0.5),
-            routing_overhead_p95_ms=_percentile(routing_latencies, 0.95),
-            task_success_rate=task_success_rate,
-            silent_failure_recovery_rate=silent_failure_recovery_rate,
-            cost_efficiency=cost_efficiency,
-            effective_cost_per_success_usd=effective_cost_per_success,
-            sample_size=len(runs),
-        )
+        return compute_kpis(router_name, runs, turns, all_cloud_baseline_cost_usd)
 
     def compute_comparative_metrics(self, router_name: str) -> Optional[dict[str, Any]]:
         """Aggregate spec section 5.3's static-vs-dynamic comparative metrics.

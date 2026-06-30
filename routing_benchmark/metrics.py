@@ -33,7 +33,7 @@ from typing import Optional
 
 from routing_benchmark.models import AgentState, ModelTarget, RoutingDecision, RoutingFeatures, TaskCase, TokenUsage
 
-__all__ = ["TurnMetric", "RunResult", "KPISummary", "BaseMetricCollector"]
+__all__ = ["TurnMetric", "RunResult", "KPISummary", "BaseMetricCollector", "percentile", "compute_kpis"]
 
 
 @dataclass(frozen=True)
@@ -217,6 +217,64 @@ class KPISummary:
     cost_efficiency: float
     effective_cost_per_success_usd: float
     sample_size: int
+
+
+def percentile(sorted_values: list[float], pct: float) -> float:
+    """Linear-interpolated percentile over an already-sorted list."""
+    if not sorted_values:
+        return 0.0
+    rank = (len(sorted_values) - 1) * pct
+    lower, upper = int(rank), min(int(rank) + 1, len(sorted_values) - 1)
+    return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * (rank - lower)
+
+
+def compute_kpis(
+    router_name: str,
+    runs: "list[RunResult]",
+    turns: "list[TurnMetric]",
+    all_cloud_baseline_cost_usd: Optional[float] = None,
+) -> "KPISummary":
+    """Aggregate KPIs for one router from pre-filtered runs and turns.
+
+    Args:
+        router_name: Used only to populate KPISummary.router_name.
+        runs: All RunResults for this router (caller must filter by router_name).
+        turns: All TurnMetrics for this router (caller must filter by router_name).
+        all_cloud_baseline_cost_usd: Total cost of replaying the same tasks
+            forcing target=CLOUD every turn (spec section 5.1 Cost Efficiency).
+            Pass None to report cost_efficiency as NaN.
+    """
+    if not runs:
+        raise ValueError(f"no runs recorded for router {router_name!r}")
+
+    routing_latencies = sorted(t.routing_latency_ms for t in turns)
+    wall_avoidance_rate = 1 - (sum(1 for r in runs if r.wall_events > 0) / len(runs))
+    task_success_rate = sum(1 for r in runs if r.success) / len(runs)
+
+    injected = sum(r.silent_failures_injected for r in runs)
+    recovered = sum(r.silent_failures_recovered for r in runs)
+    silent_failure_recovery_rate = (recovered / injected) if injected else 1.0
+
+    total_cost = sum(r.total_cost_usd for r in runs)
+    successful = sum(1 for r in runs if r.success)
+    effective_cost_per_success = (total_cost / successful) if successful else float("inf")
+
+    if all_cloud_baseline_cost_usd is not None and all_cloud_baseline_cost_usd > 0:
+        cost_efficiency = 1 - (total_cost / all_cloud_baseline_cost_usd)
+    else:
+        cost_efficiency = float("nan")
+
+    return KPISummary(
+        router_name=router_name,
+        wall_avoidance_rate=wall_avoidance_rate,
+        routing_overhead_p50_ms=percentile(routing_latencies, 0.5),
+        routing_overhead_p95_ms=percentile(routing_latencies, 0.95),
+        task_success_rate=task_success_rate,
+        silent_failure_recovery_rate=silent_failure_recovery_rate,
+        cost_efficiency=cost_efficiency,
+        effective_cost_per_success_usd=effective_cost_per_success,
+        sample_size=len(runs),
+    )
 
 
 class BaseMetricCollector(ABC):
