@@ -27,7 +27,6 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -446,7 +445,7 @@ def fig_g_pareto_frontier(t1: dict, out_dir: Path) -> None:
             fontweight="bold", va="top")
 
     # Context-aware configurations
-    text_nudge = {"0.50": (6, -16), "0.65": (6, 8), "0.80": (6, -16), "0.85": (-78, 8)}
+    text_nudge = {"0.50": (6, -16), "0.65": (12, 6), "0.80": (0, 16), "0.85": (10, -20)}
     for thresh in THRESH_ORDER:
         r   = t1[thresh]
         p95 = r["p95_latency_ms"]
@@ -488,10 +487,9 @@ def fig_g_pareto_frontier(t1: dict, out_dir: Path) -> None:
     ax.set_xlabel("p95 Routing Latency  (ms, log scale)", fontsize=12)
     ax.set_ylabel("WAR gap vs. Static Semantic at near_wall  (pp)", fontsize=12)
 
+    # Context-Aware series aren't in the legend — each point is already
+    # direct-labeled on the plot, so a legend entry would just repeat it.
     legend_elements = [
-        mpatches.Patch(facecolor=THRESH_COLORS[t], alpha=0.85, label=f"Context-Aware @ {t}")
-        for t in THRESH_ORDER
-    ] + [
         Line2D([0], [0], color="grey",  marker="D", linestyle="None",
                markersize=9, label="Reference routers"),
         Line2D([0], [0], color="black", lw=1.8, linestyle="--", label="Spec: p95 ≤ 150 ms"),
