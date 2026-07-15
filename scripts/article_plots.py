@@ -1,5 +1,5 @@
 """
-Simplified 7-figure article set for the LLM routing benchmark.
+Simplified 8-figure article set for the LLM routing benchmark.
 One figure, one message. No dual axes. No multi-panel charts.
 
   A — WAR improvement across context depth levels (line chart)
@@ -9,10 +9,15 @@ One figure, one message. No dual axes. No multi-panel charts.
   E — Pre-emption ablation: is the WAR gain real? (3 bars, single panel)
   F — Escalation timing: when does the router escalate? (lead-time histogram)
   G — Pareto frontier: latency vs. WAR gap (synthesis scatter)
+  H — Escalation precision: were those escalations necessary? (single stacked bar)
+
+F and H are deliberately separate: F is a distribution (timing/lateness),
+H is a single ratio (necessity). They used to be one chart with a
+two-claim title; splitting them gives each a single 3-5 second takeaway.
 
 Usage:
     python scripts/article_plots.py
-    # Saves plots/article_fig{A-G}.png at 300 DPI
+    # Saves plots/article_fig{A-H}.png at 300 DPI
 """
 
 from __future__ import annotations
@@ -352,8 +357,9 @@ def fig_f_escalation_timing(t3: dict, out_dir: Path) -> None:
             fontsize=12, fontweight="bold", color=WONG["vermillion"])
 
     if n_clipped > 0:
-        ax.text(0.02, 0.93, f"({n_clipped} extreme outliers beyond −5 not shown)",
-                ha="left", va="top", transform=ax.transAxes, fontsize=9, color="grey")
+        ax.text(0.98, 0.03, f"({n_clipped} extreme outliers beyond −5 not shown)",
+                ha="right", va="bottom", transform=ax.transAxes, fontsize=9.5,
+                color="#444444", fontweight="bold")
 
     ax.set_xlabel(
         "Context headroom at escalation\n"
@@ -363,12 +369,66 @@ def fig_f_escalation_timing(t3: dict, out_dir: Path) -> None:
     ax.set_ylabel("Number of cloud escalation events", fontsize=12)
     ax.legend(fontsize=10.5, framealpha=0.9, loc="upper left")
     ax.set_title(
-        f"The router mostly escalates too late  (mean headroom = {lt_mean:.2f})\n"
-        f"Precision = 21% — only 13 of 62 escalations were actually needed",
+        f"The router mostly escalates too late  (mean headroom = {lt_mean:.2f})",
         fontsize=12, fontweight="bold", pad=10,
     )
     plt.tight_layout()
     _save(fig, "article_figF.png", out_dir)
+
+
+# ── Fig H — Escalation precision: were those escalations even necessary? ──────
+
+def fig_h_escalation_precision(t3: dict, out_dir: Path) -> None:
+    """Single 100%-stacked bar — necessary vs. unnecessary cloud escalations.
+
+    Deliberately the simplest chart in the set: precision is one ratio,
+    not a distribution, so it gets one bar, not a histogram.
+    """
+    n_total     = t3["n_ca_cloud_escalations"]
+    precision   = t3["escalation_precision"]
+    if n_total == 0 or np.isnan(precision):
+        print("  Skipped article_figH.png (no cloud escalations with shadow data)")
+        return
+    n_necessary = round(precision * n_total)
+    n_unnecessary = n_total - n_necessary
+    pct_necessary = 100.0 * n_necessary / n_total
+    pct_unnecessary = 100.0 * n_unnecessary / n_total
+
+    fig, ax = plt.subplots(figsize=(8.5, 3.2))
+
+    ax.barh([0], [n_necessary], color=WONG["green"], edgecolor="white", height=0.5)
+    ax.barh([0], [n_unnecessary], left=[n_necessary], color=WONG["vermillion"],
+            edgecolor="white", height=0.5)
+
+    # Category names sit directly above each segment — no legend needed.
+    ax.text(n_necessary / 2, 0.42, "Necessary\n(local model would have failed)",
+            ha="center", va="bottom", fontsize=10.5, color=WONG["green"], fontweight="bold")
+    ax.text(n_necessary + n_unnecessary / 2, 0.42,
+            "Unnecessary\n(local model would have been fine)",
+            ha="center", va="bottom", fontsize=10.5, color=WONG["vermillion"], fontweight="bold")
+
+    # Count + percent sit inside each segment.
+    ax.text(n_necessary / 2, 0,
+            f"{n_necessary}\n({pct_necessary:.0f}%)",
+            ha="center", va="center", fontsize=13, fontweight="bold", color="white")
+    ax.text(n_necessary + n_unnecessary / 2, 0,
+            f"{n_unnecessary}\n({pct_unnecessary:.0f}%)",
+            ha="center", va="center", fontsize=13, fontweight="bold", color="white")
+
+    ax.set_xlim(0, n_total)
+    ax.set_ylim(-0.6, 1.0)
+    ax.set_yticks([])
+    ax.set_xlabel(f"Cloud escalations (n = {n_total})", fontsize=11)
+    ax.set_title(
+        f"{pct_unnecessary:.0f}% of cloud escalations were unnecessary\n"
+        f"the local model would have been fine",
+        fontsize=12, fontweight="bold", pad=10,
+    )
+    for spine in ("top", "right", "left"):
+        ax.spines[spine].set_visible(False)
+    ax.grid(False)
+    plt.tight_layout()
+    _save(fig, "article_figH.png", out_dir)
 
 
 # ── Fig G — Pareto Frontier: synthesis scatter ────────────────────────────────
@@ -457,13 +517,14 @@ def main() -> None:
     t2 = compute_thread2_preemption_ablation()
     t3 = compute_thread3_escalation_quality()
 
-    print("\nGenerating 7 simplified figures ...")
+    print("\nGenerating 8 simplified figures ...")
     fig_a_war_vs_depth(PLOTS_DIR)
     fig_b_latency_bars(t1, PLOTS_DIR)
     fig_c_routing_composition(t1, PLOTS_DIR)
     fig_d_latency_cdf_two(PLOTS_DIR)
     fig_e_preemption_ablation(t2, PLOTS_DIR)
     fig_f_escalation_timing(t3, PLOTS_DIR)
+    fig_h_escalation_precision(t3, PLOTS_DIR)
     fig_g_pareto_frontier(t1, PLOTS_DIR)
 
     saved = sorted(PLOTS_DIR.glob("article_fig*.png"))
